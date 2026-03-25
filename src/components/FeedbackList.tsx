@@ -21,17 +21,6 @@ export default function FeedbackList({ items, isLoading }: Props) {
     "Transportation" | "Meals"
   >("Transportation");
 
-  if (isLoading) {
-    return (
-      <div className="rounded-[28px] border border-white/10 bg-white/8 p-5 shadow-[0_8px_30px_rgba(0,0,0,0.25)] backdrop-blur-xl">
-        <div className="mb-4">
-          <h2 className="text-2xl font-bold text-white">Feedback List</h2>
-          <p className="text-sm text-slate-300">Loading feedback...</p>
-        </div>
-      </div>
-    );
-  }
-
   const filteredItems = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
@@ -58,6 +47,17 @@ export default function FeedbackList({ items, isLoading }: Props) {
   const mealsCount = items.filter(
     (item) => item.category?.toLowerCase().trim() === "meals"
   ).length;
+
+  if (isLoading) {
+    return (
+      <div className="rounded-[28px] border border-white/10 bg-white/8 p-5 shadow-[0_8px_30px_rgba(0,0,0,0.25)] backdrop-blur-xl">
+        <div className="mb-4">
+          <h2 className="text-2xl font-bold text-white">Feedback List</h2>
+          <p className="text-sm text-slate-300">Loading feedback...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-[28px] border border-white/10 bg-white/8 p-5 shadow-[0_8px_30px_rgba(0,0,0,0.25)] backdrop-blur-xl">
