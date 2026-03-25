@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/src/lib/auth";
 import { getSheetRows } from "@/src/lib/sheets";
 import { buildAnalytics, buildFilteredAnalytics } from "@/src/lib/analytics";
 
@@ -34,7 +36,6 @@ function getCategoryFromHeader(header: string) {
   if (text.includes("uniform")) return "Uniforms";
   if (text.includes("equipment")) return "Equipment";
   if (text.includes("transport") || text.includes("driver")) return "Transportation";
-  // Expanded keywords for Meals
   if (text.includes("meal") || text.includes("food") || text.includes("diet") || text.includes("eat") || text.includes("cater")) return "Meals";
   if (text.includes("accommodation") || text.includes("accomodation")) return "Accommodation";
   if (text.includes("cysdo")) return "CYSDO Sports Unit";
@@ -44,10 +45,17 @@ function getCategoryFromHeader(header: string) {
 
 function isCommentHeader(header: string) {
   const text = normalizeHeaderText(header);
-  // Returns true if it contains feedback keywords OR if it's a known category name (handling direct comment boxes)
-  const isFeedbackWord = text.includes("remark") || text.includes("suggestion") || text.includes("comment") || text.includes("feedback") || text.includes("opinion");
-  const isDirectCategoryMatch = FIXED_CATEGORIES.some(cat => text === cat.toLowerCase());
-  
+  const isFeedbackWord =
+    text.includes("remark") ||
+    text.includes("suggestion") ||
+    text.includes("comment") ||
+    text.includes("feedback") ||
+    text.includes("opinion");
+
+  const isDirectCategoryMatch = FIXED_CATEGORIES.some(
+    (cat) => text === cat.toLowerCase()
+  );
+
   return isFeedbackWord || isDirectCategoryMatch;
 }
 
@@ -91,7 +99,10 @@ function buildCommentCategoryMap(headers: string[]) {
       currentCategory = questionCategory;
       map[index] = questionCategory;
     } else if (isCommentHeader(header)) {
-      map[index] = (commentCategory && commentCategory !== "Other") ? commentCategory : currentCategory;
+      map[index] =
+        commentCategory && commentCategory !== "Other"
+          ? commentCategory
+          : currentCategory;
     } else {
       map[index] = currentCategory;
     }
@@ -102,6 +113,23 @@ function buildCommentCategoryMap(headers: string[]) {
 
 export async function GET(req: Request) {
   try {
+    const session = await getServerSession(authOptions);
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const allowedEmails =
+      process.env.ALLOWED_EMAILS?.split(",")
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean) ?? [];
+
+    const userEmail = session.user.email.toLowerCase();
+
+    if (!allowedEmails.includes(userEmail)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const rows = await getSheetRows();
     if (!rows || rows.length === 0) throw new Error("No data found");
 
@@ -113,24 +141,33 @@ export async function GET(req: Request) {
     const dataRows = rows.slice(1);
     const commentCategoryMap = buildCommentCategoryMap(headers);
 
-    // Finding indexes dynamically to handle minor header naming differences
-    const categoryIndex = headers.findIndex((h) => normalizeHeaderText(h).includes("category"));
-    const emailIndex = headers.findIndex((h) => normalizeHeaderText(h).includes("email"));
-    const timestampIndex = headers.findIndex((h) => normalizeHeaderText(h).includes("timestamp"));
+    const categoryIndex = headers.findIndex((h) =>
+      normalizeHeaderText(h).includes("category")
+    );
+    const emailIndex = headers.findIndex((h) =>
+      normalizeHeaderText(h).includes("email")
+    );
+    const timestampIndex = headers.findIndex((h) =>
+      normalizeHeaderText(h).includes("timestamp")
+    );
 
     const roleCounts = FIXED_ROLES.map((roleName) => {
       const seen = new Set<string>();
       dataRows.forEach((row) => {
         const rowRole = (row[categoryIndex] || "").trim();
         if (rowRole.toLowerCase() !== roleName.toLowerCase()) return;
-        const uniqueKey = (emailIndex >= 0 ? row[emailIndex] : "") || (timestampIndex >= 0 ? row[timestampIndex] : "");
+        const uniqueKey =
+          (emailIndex >= 0 ? row[emailIndex] : "") ||
+          (timestampIndex >= 0 ? row[timestampIndex] : "");
         if (uniqueKey) seen.add(uniqueKey);
       });
       return { role: roleName, count: seen.size };
     });
 
     const categories = FIXED_CATEGORIES.map((category) => {
-      const categoryHeaders = headers.filter((h) => getCategoryFromHeader(h) === category);
+      const categoryHeaders = headers.filter(
+        (h) => getCategoryFromHeader(h) === category
+      );
       const ratings: number[] = [];
       const respondentSet = new Set<string>();
 
@@ -138,7 +175,9 @@ export async function GET(req: Request) {
         const rowRole = (row[categoryIndex] || "").trim();
         if (role !== "All" && rowRole.toLowerCase() !== role.toLowerCase()) return;
 
-        const uniqueKey = (emailIndex >= 0 ? row[emailIndex] : "") || (timestampIndex >= 0 ? row[timestampIndex] : "");
+        const uniqueKey =
+          (emailIndex >= 0 ? row[emailIndex] : "") ||
+          (timestampIndex >= 0 ? row[timestampIndex] : "");
         let hasRating = false;
 
         categoryHeaders.forEach((h) => {
@@ -153,8 +192,18 @@ export async function GET(req: Request) {
         if (hasRating && uniqueKey) respondentSet.add(uniqueKey);
       });
 
-      const avg = ratings.length > 0 ? Number((ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(2)) : 0;
-      return { name: category, averageRating: avg, count: respondentSet.size };
+      const avg =
+        ratings.length > 0
+          ? Number(
+              (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(2)
+            )
+          : 0;
+
+      return {
+        name: category,
+        averageRating: avg,
+        count: respondentSet.size,
+      };
     });
 
     const feedbackList: any[] = [];
@@ -168,7 +217,6 @@ export async function GET(req: Request) {
       const timestamp = timestampIndex >= 0 ? row[timestampIndex] : "";
 
       headers.forEach((header, headerIndex) => {
-        // Process Comments
         if (isCommentHeader(header)) {
           const comment = (row[headerIndex] || "").trim();
           if (comment && comment.toLowerCase() !== "n/a" && isNaN(Number(comment))) {
@@ -178,33 +226,49 @@ export async function GET(req: Request) {
 
             if (!feedbackSeen.has(uniqueFeedbackKey)) {
               feedbackSeen.add(uniqueFeedbackKey);
-              feedbackList.push({ category, comment, rating: null, question, timestamp });
+              feedbackList.push({
+                category,
+                comment,
+                rating: null,
+                question,
+                timestamp,
+              });
             }
           }
         }
 
-        // Process Ratings for Details
         const category = getCategoryFromHeader(header);
         if (category === selectedCategory) {
           const val = Number(row[headerIndex]);
           if (!Number.isNaN(val) && val >= 1 && val <= 5) {
             const question = extractQuestionLabel(header);
             if (!detailsMap.has(question)) {
-              detailsMap.set(question, { question, totalResponses: 0, breakdown: { 5:0, 4:0, 3:0, 2:0, 1:0 } });
+              detailsMap.set(question, {
+                question,
+                totalResponses: 0,
+                breakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+              });
             }
             const item = detailsMap.get(question);
             item.totalResponses += 1;
-            item.breakdown[val as 1|2|3|4|5] += 1;
+            item.breakdown[val as 1 | 2 | 3 | 4 | 5] += 1;
           }
         }
       });
     });
 
     const details = Array.from(detailsMap.values()).map((item) => {
-      const totalScore = Object.entries(item.breakdown).reduce((acc, [rating, count]) => acc + (Number(rating) * (count as number)), 0);
+      const totalScore = Object.entries(item.breakdown).reduce(
+        (acc, [rating, count]) => acc + Number(rating) * (count as number),
+        0
+      );
+
       return {
         ...item,
-        averageRating: item.totalResponses > 0 ? Number((totalScore / item.totalResponses).toFixed(2)) : 0,
+        averageRating:
+          item.totalResponses > 0
+            ? Number((totalScore / item.totalResponses).toFixed(2))
+            : 0,
       };
     });
 
@@ -216,10 +280,15 @@ export async function GET(req: Request) {
       feedbackList,
       details,
       summary: buildAnalytics(rows),
-      roleAnalytics: buildFilteredAnalytics(rows, { category: role === "All" ? undefined : role }),
+      roleAnalytics: buildFilteredAnalytics(rows, {
+        category: role === "All" ? undefined : role,
+      }),
     });
   } catch (error) {
     console.error("Feedback API error:", error);
-    return NextResponse.json({ error: "Failed to load feedback data" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load feedback data" },
+      { status: 500 }
+    );
   }
 }
